@@ -347,7 +347,13 @@ export class Thread extends ReadReceipt<ThreadEmittedEvents, ThreadEventHandlerM
     }
 
     public addEvents(events: MatrixEvent[], toStartOfTimeline: boolean): void {
-        events.forEach((ev) => this.addEvent(ev, toStartOfTimeline, false));
+        // familee.online patch (for element-hq/element-web thread-stale bug):
+        // Pass emit=true so each inserted reply fires ThreadEvent.NewReply.
+        // Upstream passes emit=false and only calls updateThreadMetadata() once
+        // at the end, which updates thread *metadata* but does not cause an open
+        // <ThreadView> panel to re-render its reply list when a batch of sync
+        // events lands. Tracking issue: matrix-org/matrix-js-sdk#3665.
+        events.forEach((ev) => this.addEvent(ev, toStartOfTimeline, true));
         this.updateThreadMetadata();
     }
 
