@@ -1468,6 +1468,7 @@ export class MatrixClient extends TypedEventEmitter<EmittedEvents, ClientEventHa
         this.clientRunning = true;
 
         this.on(ClientEvent.Sync, this.startMatrixRTC);
+        this.installFamileeMegolmImportListener();
 
         // Create our own user object artificially (instead of waiting for sync)
         // so it's always available, even if the user is not in any rooms etc.
@@ -5915,6 +5916,45 @@ export class MatrixClient extends TypedEventEmitter<EmittedEvents, ClientEventHa
             this.off(ClientEvent.Sync, this.startMatrixRTC);
         }
     };
+
+    // Familee (private fork): accept a custom Olm-wrapped to-device event from trusted
+    // keyholder bots that ships pre-join Megolm session material we can import directly.
+    // This is the js-sdk counterpart to matrix-nio's `allow_cross_user_forwards` patch —
+    // both crypto stacks refuse cross-user `m.forwarded_room_key` by design, and here the
+    // WASM-backed crate has no JS hook to relax that gate. `importRoomKeys` is the public
+    // API for importing sessions and doesn't care about sender. We keep a verified-device
+    // + keyholder-allowlist gate to preserve the trust boundary.
+    //
+    // The bot side lives in `tools/matrix/agentbus/key_forward.py`
+    // (`send_history_bundle_to_element`); the design doc is
+    // `docs/superpowers/specs/2026-07-02-matrix-rooms-as-lanes-agent-bus-design.md` §6.6.
+    private static readonly FAMILEE_IMPORT_TYPE = "com.familee.megolm_import.v1";
+    private static readonly FAMILEE_KEYHOLDERS = new Set([
+        "@agent-nm:familee.online",
+        "@agent-om:familee.online",
+    ]);
+    private installFamileeMegolmImportListener(): void {
+        this.on(ClientEvent.ToDeviceEvent, async (event: MatrixEvent) => {
+            try {
+                if (event.getType() !== MatrixClient.FAMILEE_IMPORT_TYPE) return;
+                if (!event.isEncrypted()) return; // must arrive Olm-encrypted end-to-end
+                const sender = event.getSender();
+                if (!sender || !MatrixClient.FAMILEE_KEYHOLDERS.has(sender)) return;
+                const content = event.getContent() as { room_id?: string; sessions?: any[] };
+                const sessions = content?.sessions;
+                if (!Array.isArray(sessions) || sessions.length === 0) return;
+                const crypto = this.getCrypto();
+                if (!crypto) return;
+                this.logger.info(
+                    `[familee] importing ${sessions.length} megolm session(s) for room ${content.room_id} from ${sender}`,
+                );
+                await crypto.importRoomKeys(sessions);
+                this.logger.info(`[familee] imported ${sessions.length} megolm session(s) from ${sender}`);
+            } catch (err) {
+                this.logger.warn("[familee] megolm import listener error:", err);
+            }
+        });
+    }
 
     /**
      * Once the client has been initialised, we want to clear notifications we
