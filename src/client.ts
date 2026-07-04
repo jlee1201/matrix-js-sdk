@@ -5934,24 +5934,52 @@ export class MatrixClient extends TypedEventEmitter<EmittedEvents, ClientEventHa
         "@agent-om:familee.online",
     ]);
     private installFamileeMegolmImportListener(): void {
+        // eslint-disable-next-line no-console
+        console.log("[familee] megolm-import listener installed on client for", this.getUserId());
         this.on(ClientEvent.ToDeviceEvent, async (event: MatrixEvent) => {
+            const t = event.getType();
+            const enc = event.isEncrypted();
+            const sender = event.getSender();
+            // Verbose diagnostic — fires for EVERY to-device event so we can see if our
+            // listener is even reachable, and which filter gate rejects a given event.
+            // Remove or downgrade once decryption is confirmed working.
+            // eslint-disable-next-line no-console
+            console.log(`[familee] toDevice type=${t} enc=${enc} sender=${sender}`);
             try {
-                if (event.getType() !== MatrixClient.FAMILEE_IMPORT_TYPE) return;
-                if (!event.isEncrypted()) return; // must arrive Olm-encrypted end-to-end
-                const sender = event.getSender();
-                if (!sender || !MatrixClient.FAMILEE_KEYHOLDERS.has(sender)) return;
+                if (t !== MatrixClient.FAMILEE_IMPORT_TYPE) return;
+                if (!enc) {
+                    // eslint-disable-next-line no-console
+                    console.warn(`[familee] skipping ${MatrixClient.FAMILEE_IMPORT_TYPE} from ${sender}: not encrypted`);
+                    return;
+                }
+                if (!sender || !MatrixClient.FAMILEE_KEYHOLDERS.has(sender)) {
+                    // eslint-disable-next-line no-console
+                    console.warn(`[familee] rejecting import: sender ${sender} not in keyholder allowlist`);
+                    return;
+                }
                 const content = event.getContent() as { room_id?: string; sessions?: any[] };
                 const sessions = content?.sessions;
-                if (!Array.isArray(sessions) || sessions.length === 0) return;
+                if (!Array.isArray(sessions) || sessions.length === 0) {
+                    // eslint-disable-next-line no-console
+                    console.warn(`[familee] import content has no sessions; content=`, content);
+                    return;
+                }
                 const crypto = this.getCrypto();
-                if (!crypto) return;
-                this.logger.info(
+                if (!crypto) {
+                    // eslint-disable-next-line no-console
+                    console.warn("[familee] no crypto backend; cannot import");
+                    return;
+                }
+                // eslint-disable-next-line no-console
+                console.log(
                     `[familee] importing ${sessions.length} megolm session(s) for room ${content.room_id} from ${sender}`,
                 );
                 await crypto.importRoomKeys(sessions);
-                this.logger.info(`[familee] imported ${sessions.length} megolm session(s) from ${sender}`);
+                // eslint-disable-next-line no-console
+                console.log(`[familee] imported ${sessions.length} megolm session(s) from ${sender}`);
             } catch (err) {
-                this.logger.warn("[familee] megolm import listener error:", err);
+                // eslint-disable-next-line no-console
+                console.warn("[familee] megolm import listener error:", err);
             }
         });
     }
