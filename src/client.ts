@@ -5942,34 +5942,20 @@ export class MatrixClient extends TypedEventEmitter<EmittedEvents, ClientEventHa
         "@agent-om:familee.online",
     ]);
     private installFamileeMegolmImportListener(): void {
-        // eslint-disable-next-line no-console
-        console.log("[familee] megolm-import listener installed on client for", this.getUserId());
         this.on(ClientEvent.ToDeviceEvent, async (event: MatrixEvent) => {
-            const t = event.getType();
-            const enc = event.isEncrypted();
+            // Fast-path filter: only our custom import type, from encrypted to-device,
+            // from an allowlisted keyholder bot. Everything else is silently ignored so
+            // this listener stays quiet on the hot path.
+            if (event.getType() !== MatrixClient.FAMILEE_IMPORT_TYPE) return;
+            if (!event.isEncrypted()) return;
             const sender = event.getSender();
-            // Verbose diagnostic — fires for EVERY to-device event so we can see if our
-            // listener is even reachable, and which filter gate rejects a given event.
-            // Remove or downgrade once decryption is confirmed working.
-            // eslint-disable-next-line no-console
-            console.log(`[familee] toDevice type=${t} enc=${enc} sender=${sender}`);
+            if (!sender || !MatrixClient.FAMILEE_KEYHOLDERS.has(sender)) return;
             try {
-                if (t !== MatrixClient.FAMILEE_IMPORT_TYPE) return;
-                if (!enc) {
-                    // eslint-disable-next-line no-console
-                    console.warn(`[familee] skipping ${MatrixClient.FAMILEE_IMPORT_TYPE} from ${sender}: not encrypted`);
-                    return;
-                }
-                if (!sender || !MatrixClient.FAMILEE_KEYHOLDERS.has(sender)) {
-                    // eslint-disable-next-line no-console
-                    console.warn(`[familee] rejecting import: sender ${sender} not in keyholder allowlist`);
-                    return;
-                }
                 const content = event.getContent() as { room_id?: string; sessions?: any[] };
                 const sessions = content?.sessions;
                 if (!Array.isArray(sessions) || sessions.length === 0) {
                     // eslint-disable-next-line no-console
-                    console.warn(`[familee] import content has no sessions; content=`, content);
+                    console.warn("[familee] megolm-import content has no sessions; content=", content);
                     return;
                 }
                 const crypto = this.getCrypto();
@@ -5978,6 +5964,9 @@ export class MatrixClient extends TypedEventEmitter<EmittedEvents, ClientEventHa
                     console.warn("[familee] no crypto backend; cannot import");
                     return;
                 }
+                // Success logs — one per delivered bundle. Low volume; kept as an
+                // operational trail so a future 'my Element isn't decrypting bus history'
+                // report can be diagnosed by checking the console for [familee] lines.
                 // eslint-disable-next-line no-console
                 console.log(
                     `[familee] importing ${sessions.length} megolm session(s) for room ${content.room_id} from ${sender}`,
