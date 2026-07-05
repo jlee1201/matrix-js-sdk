@@ -5917,24 +5917,25 @@ export class MatrixClient extends TypedEventEmitter<EmittedEvents, ClientEventHa
         }
     };
 
-    // Familee (private fork): originally designed to receive a custom Olm-wrapped to-device
-    // event from trusted keyholder bots and import the ferried Megolm session material via
-    // `crypto.importRoomKeys()`. TURNS OUT THIS PATH IS UNREACHABLE from a JS-only patch:
-    // `matrix-sdk-crypto` (the WASM crypto backend) has a hardcoded allowlist of decrypted-
-    // to-device event types at `crates/matrix-sdk-crypto/src/machine/mod.rs:1420` and warns
-    // "Received an unexpected encrypted to-device event" for anything outside it. Our custom
-    // `com.familee.megolm_import.v1` is dropped in Rust before it ever reaches js-sdk. The
-    // same allowlist also blocks `m.forwarded_room_key` from senders whose sessions we didn't
-    // explicitly request.
+    // Familee (private fork): accept a custom Olm-wrapped to-device event from trusted
+    // keyholder bots and import the ferried Megolm session material via
+    // `crypto.importRoomKeys()`. This is the js-sdk counterpart to matrix-nio's
+    // `allow_cross_user_forwards` patch — both crypto stacks refuse cross-user
+    // `m.forwarded_room_key` by design, and here the WASM-backed crate has no JS hook to
+    // relax that gate. `importRoomKeys` is the public API for importing sessions and
+    // doesn't care about sender. We keep a verified-device + keyholder-allowlist gate to
+    // preserve the trust boundary.
     //
-    // The listener stays as documentation + a diagnostic hook (verbose console.logs make it
-    // easy to see if a future rust-crypto rebase changes behavior). The WORKING WORKAROUND is
-    // `tools/matrix/refresh-element-keys.sh` in the dealia repo: it pulls the same session
-    // material straight from the local `agentbusd` crypto store and calls
-    // `crypto.importRoomKeys()` in-process via pin_driver — bypassing the whole to-device
-    // transport. A proper fix requires forking `matrix-sdk-crypto` to add our event type to
-    // the allowlist + emit it through (design record: dealia
-    // `docs/superpowers/specs/2026-07-02-matrix-rooms-as-lanes-agent-bus-design.md` §6.6).
+    // Rust-crypto WARNs at `crates/matrix-sdk-crypto/src/machine/mod.rs:1420` ("Received an
+    // unexpected encrypted to-device event") when our custom type flows through, but the
+    // warn is harmless: `receive_encrypted_to_device_event` still returns
+    // `Some(ProcessedToDeviceEvent::Decrypted{...})` regardless, so the event reaches us.
+    //
+    // The bot side lives in `tools/matrix/agentbus/key_forward.py`
+    // (`send_history_bundle_to_element`); the design record is
+    // `docs/superpowers/specs/2026-07-02-matrix-rooms-as-lanes-agent-bus-design.md` §6.6.
+    // A CLI backfill helper `tools/matrix/refresh-element-keys.sh` remains for cases where
+    // an existing member needs history pushed (or where the listener isn't loaded yet).
     private static readonly FAMILEE_IMPORT_TYPE = "com.familee.megolm_import.v1";
     private static readonly FAMILEE_KEYHOLDERS = new Set([
         "@agent-nm:familee.online",
